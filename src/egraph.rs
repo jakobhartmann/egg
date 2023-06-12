@@ -9,6 +9,8 @@ use ::serde::{Deserialize, Serialize};
 
 use log::*;
 
+use std::hash::{Hash, Hasher};
+
 /** A data structure to keep track of equalities between expressions.
 
 Check out the [background tutorial](crate::tutorials::_01_background)
@@ -84,6 +86,16 @@ pub struct EGraph<L: Language, N: Analysis<L>> {
     /// Only manually set it if you know what you're doing.
     #[cfg_attr(feature = "serde-1", serde(skip))]
     pub clean: bool,
+}
+
+impl<L: Language, N: Analysis<L>> Hash for EGraph<L, N> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (_key, value) in &self.classes {
+            for enode in value.iter() {
+                enode.hash(state);
+            }
+        }
+    }
 }
 
 #[cfg(feature = "serde-1")]

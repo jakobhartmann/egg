@@ -78,6 +78,7 @@ where
         let max_order = egraph.total_number_of_nodes() as f64 * 10.0;
 
         let mut model = Model::default();
+        model.set_parameter("log", "0");
 
         let vars: HashMap<Id, ClassVars> = egraph
             .classes()
@@ -134,7 +135,7 @@ where
             }
         }
 
-        dbg!(max_order);
+        // dbg!(max_order);
 
         Self {
             egraph,
@@ -152,12 +153,14 @@ where
     /// Extract a single rooted term.
     ///
     /// This is just a shortcut for [`LpExtractor::solve_multiple`].
-    pub fn solve(&mut self, root: Id) -> RecExpr<L> {
-        self.solve_multiple(&[root]).0
+    pub fn solve(&mut self, root: Id) -> (f64, RecExpr<L>) {
+        let solution = self.solve_multiple(&[root]);
+        // cost, expr
+        (solution.2, solution.0)
     }
 
     /// Extract (potentially multiple) roots
-    pub fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>) {
+    pub fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>, f64) {
         let egraph = self.egraph;
 
         for class in self.vars.values() {
@@ -202,11 +205,11 @@ where
         let root_idxs = roots.iter().map(|root| ids[root]).collect();
 
         assert!(expr.is_dag(), "LpExtract found a cyclic term!: {:?}", expr);
-        (expr, root_idxs)
+        (expr, root_idxs, solution.raw().best_possible_value())
     }
 }
 
-fn find_cycles<L, N>(egraph: &EGraph<L, N>, mut f: impl FnMut(Id, usize))
+pub fn find_cycles<L, N>(egraph: &EGraph<L, N>, mut f: impl FnMut(Id, usize))
 where
     L: Language,
     N: Analysis<L>,

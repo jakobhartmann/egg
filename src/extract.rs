@@ -3,6 +3,8 @@ use std::fmt::Debug;
 
 use crate::util::HashMap;
 use crate::{Analysis, EClass, EGraph, Id, Language, RecExpr};
+use crate::lp_extract::find_cycles;
+use crate::HashSet;
 
 /** Extracting a single [`RecExpr`] from an [`EGraph`].
 
@@ -40,7 +42,7 @@ assert_eq!(best, "10".parse().unwrap());
 #[derive(Debug)]
 pub struct Extractor<'a, CF: CostFunction<L>, L: Language, N: Analysis<L>> {
     cost_function: CF,
-    costs: HashMap<Id, (CF::Cost, L)>,
+    pub costs: HashMap<Id, (CF::Cost, L)>,
     egraph: &'a EGraph<L, N>,
 }
 
@@ -124,7 +126,7 @@ pub trait CostFunction<L: Language> {
     /// For this to work properly, your cost function should be
     /// _monotonic_, i.e. `cost` should return a `Cost` greater than
     /// any of the child costs of the given enode.
-    fn cost<C>(&mut self, enode: &L, costs: C) -> Self::Cost
+    fn cost<C>(&mut self, enode: &L, costs: C, eclass_id: Option<Id>) -> Self::Cost
     where
         C: FnMut(Id) -> Self::Cost;
 
@@ -136,7 +138,7 @@ pub trait CostFunction<L: Language> {
     fn cost_rec(&mut self, expr: &RecExpr<L>) -> Self::Cost {
         let mut costs: HashMap<Id, Self::Cost> = HashMap::default();
         for (i, node) in expr.as_ref().iter().enumerate() {
-            let cost = self.cost(node, |i| costs[&i].clone());
+            let cost = self.cost(node, |i| costs[&i].clone(), Some(Id::from(i)));
             costs.insert(Id::from(i), cost);
         }
         let last_id = Id::from(expr.as_ref().len() - 1);
@@ -153,11 +155,11 @@ assert_eq!(AstSize.cost_rec(&e), 4);
 ```
 
 **/
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AstSize;
 impl<L: Language> CostFunction<L> for AstSize {
     type Cost = usize;
-    fn cost<C>(&mut self, enode: &L, mut costs: C) -> Self::Cost
+    fn cost<C>(&mut self, enode: &L, mut costs: C, _eclass_id: Option<Id>) -> Self::Cost
     where
         C: FnMut(Id) -> Self::Cost,
     {
@@ -178,7 +180,7 @@ assert_eq!(AstDepth.cost_rec(&e), 2);
 pub struct AstDepth;
 impl<L: Language> CostFunction<L> for AstDepth {
     type Cost = usize;
-    fn cost<C>(&mut self, enode: &L, mut costs: C) -> Self::Cost
+    fn cost<C>(&mut self, enode: &L, mut costs: C, _eclass_id: Option<Id>) -> Self::Cost
     where
         C: FnMut(Id) -> Self::Cost,
     {
@@ -239,19 +241,29 @@ where
         cost.clone()
     }
 
-    fn node_total_cost(&mut self, node: &L) -> Option<CF::Cost> {
+    fn node_total_cost(&mut self, node: &L, eclass_id: Id) -> Option<CF::Cost> {
         let eg = &self.egraph;
         let has_cost = |id| self.costs.contains_key(&eg.find(id));
         if node.all(has_cost) {
             let costs = &self.costs;
             let cost_f = |id| costs[&eg.find(id)].0.clone();
-            Some(self.cost_function.cost(node, cost_f))
+            Some(self.cost_function.cost(node, cost_f, Some(eclass_id)))
         } else {
             None
         }
     }
 
     fn find_costs(&mut self) {
+        // Cycle checking
+        let mut cycles: HashSet<(Id, usize)> = Default::default();
+        find_cycles(self.egraph, |id, i| {
+            cycles.insert((id, i));
+        });
+        
+        if cycles.len() > 0 {
+            println!("Egraph has cycles!");
+        }
+
         let mut did_something = true;
         while did_something {
             did_something = false;
@@ -286,7 +298,7 @@ where
     fn make_pass(&mut self, eclass: &EClass<L, N::Data>) -> Option<(CF::Cost, L)> {
         let (cost, node) = eclass
             .iter()
-            .map(|n| (self.node_total_cost(n), n))
+            .map(|n| (self.node_total_cost(n, eclass.id), n))
             .min_by(|a, b| cmp(&a.0, &b.0))
             .unwrap_or_else(|| panic!("Can't extract, eclass is empty: {:#?}", eclass));
         cost.map(|c| (c, node.clone()))
